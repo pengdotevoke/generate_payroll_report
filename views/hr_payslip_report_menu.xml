@@ -1,0 +1,9 @@
+<odoo>
+    <!-- Menu item for the Excel Report Wizard -->
+    <menuitem id="menu_hr_payslip_report"
+          name="Payslip Reports"
+          parent="hr_payroll.menu_hr_payroll_report" 
+          sequence="20"
+          action="action_hr_payslip_report_wizard"/>
+
+</odoo>
