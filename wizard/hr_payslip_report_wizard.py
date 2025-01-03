@@ -1,8 +1,8 @@
-from odoo import models, fields
+from odoo import models, fields, api
 import base64
 import io
 import xlsxwriter
-from datetime import datetime, timedelta
+from datetime import datetime 
 from dateutil.relativedelta import relativedelta
 
 class HrPayslipReportWizard(models.TransientModel):
@@ -11,40 +11,55 @@ class HrPayslipReportWizard(models.TransientModel):
 
     report_file_net_pay = fields.Binary("Net Pay Report", readonly=True)
     report_file_net_pay_name = fields.Char("File Name", default="Net_Pay_Report.xlsx")
-    
     report_file_nssf = fields.Binary("NSSF Report", readonly=True)
     report_file_nssf_name = fields.Char("File Name", default="NSSF_Report.xlsx")
-    
     report_file_shif = fields.Binary("SHIF Report", readonly=True)
     report_file_shif_name = fields.Char("File Name", default="SHIF_Report.xlsx")
-    
     report_file_ahl = fields.Binary("AHL Report", readonly=True)
     report_file_ahl_name = fields.Char("File Name", default="AHL_Report.xlsx")
-    
     report_file_kra_pin = fields.Binary("PAYE Report", readonly=True)
     report_file_kra_pin_name = fields.Char("File Name", default="PAYE_Report.xlsx")
 
-    today = datetime.today()
-    
-    date_from = first_date_of_month = today.replace(day=1)
-    first_date_of_next_month = today.replace(day=1) + relativedelta(months=1)
-    date_to  = first_date_of_next_month - timedelta(days=1)
+    month = fields.Selection(
+        [(str(i), datetime(1900, i, 1).strftime('%B')) for i in range(1, 13)],
+        string="Month",
+        required=True,
+        default=str(datetime.today().month)
+    )
+    year = fields.Selection(
+        [(str(i), str(i)) for i in range(2024, datetime.today().year + 1)],
+        string="Year",
+        required=True,
+        default=str(datetime.today().year)
+    )
+
+    date_from = fields.Date(string="Date From", readonly=True)
+    date_to = fields.Date(string="Date To", readonly=True)
+
+    @api.onchange('month', 'year')
+    def _compute_dates(self):
+        if self.month and self.year:
+            self.date_from = datetime(int(self.year), int(self.month), 1)
+            self.date_to = (self.date_from + relativedelta(months=1) - relativedelta(days=1))
 
     def generate_report(self):
+        # Compute date range from user input
+        self._compute_dates()
+
         def create_workbook(filename, worksheet_title, headers, rows):
             output = io.BytesIO()
             workbook = xlsxwriter.Workbook(output)
             worksheet = workbook.add_worksheet(worksheet_title)
-            
+
             company_name = self.env.company.name
             first_date = self.date_from.strftime('%Y-%m-%d') if self.date_from else ''
             last_date = self.date_to.strftime('%Y-%m-%d') if self.date_to else ''
-            month_name = datetime.now().strftime('%B')
+            month_name = datetime.strptime(self.month, '%m').strftime('%B')
 
-            worksheet.write(0, 0, f"Company Name: {company_name}")
+            worksheet.write(0, 0, f"{company_name}")
             worksheet.write(1, 0, f"Date From: {first_date}")
             worksheet.write(2, 0, f"Date To: {last_date}")
-            worksheet.write(3, 0, f"Payroll Summary: {worksheet_title} report for {month_name}")
+            worksheet.write(3, 0, f"Payroll Summary: {worksheet_title} report for {month_name} {self.year}")
 
             for col_num, header in enumerate(headers):
                 worksheet.write(5, col_num, header)
@@ -60,9 +75,9 @@ class HrPayslipReportWizard(models.TransientModel):
             return base64.b64encode(output.read())
 
         payslips = self.env['hr.payslip'].search([
-                ('date_from', '>=', self.date_from),
-                ('date_to', '<=', self.date_to)
-            ])
+            ('date_from', '>=', self.date_from),
+            ('date_to', '<=', self.date_to)
+        ])
 
         # Net Pay Report
         headers_net_pay = ['Employee Name', 'Bank Name', 'Bank Branch', 'Net Pay']
@@ -130,21 +145,20 @@ class HrPayslipReportWizard(models.TransientModel):
              '',
              p.line_ids.filtered(lambda line: line.salary_rule_id.code == 'PAYE').amount or 0,
              ]
-            for p in payslips if p.employee_id.l10n_ke_kra_pin in target_kra_pins
+            for p in payslips
         ]
 
-        self.report_file_kra_pin = create_workbook("KRA_PIN_Report.xlsx", "Filtered KRA PIN Report", headers_kra_pin, rows_kra_pin)
+        self.report_file_kra_pin = create_workbook("PAYE_Report.xlsx", "PAYE Report", headers_kra_pin, rows_kra_pin)
 
 
-        # AHL Report
-        headers_ahl = ['ID NO', 'NAME', 'KRA PIN', 'GROSS WAGE', 'AHL RELIEF', 'AHL SELF', 'AHL EMPLOYER']
+        # AHL Report. Modify to remove AHL in line with new rules
+        headers_ahl = ['ID NO', 'NAME', 'KRA PIN', 'GROSS WAGE', 'AHL SELF', 'AHL EMPLOYER']
         rows_ahl = [
             [
                 p.employee_id.identification_id,
                 p.employee_id.name,
                 p.employee_id.l10n_ke_kra_pin,
                 p.gross_wage,
-                p.line_ids.filtered(lambda line: line.salary_rule_id.code == 'AHL RELIEF').amount or 0,
                 p.line_ids.filtered(lambda line: line.salary_rule_id.code == 'AHL_AMOUNT').amount or 0,
                 p.line_ids.filtered(lambda line: line.salary_rule_id.code == 'AHL_AMOUNT_EMP').amount or 0
             ]
